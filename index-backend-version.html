@@ -1,0 +1,864 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced PDF Q&A with Claude Citations</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js`;
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        #pdf-canvas-container { position: relative; box-shadow: 0 4px 12px rgba(0,0,0,0.15); overflow: auto; }
+        #pdf-canvas { display: block; }
+        .citation-highlight {
+            position: absolute; background-color: rgba(59, 130, 246, 0.3); border: 2px solid rgba(59, 130, 246, 0.6);
+            border-radius: 4px; box-sizing: border-box; z-index: 10; transition: all 0.3s ease-in-out; pointer-events: none;
+        }
+        .citation-highlight.active { background-color: rgba(239, 68, 68, 0.4); border-color: rgba(239, 68, 68, 0.8); box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.3); }
+        .history-item { cursor: pointer; transition: background-color 0.2s; }
+        .history-item:hover { background-color: #f9fafb; }
+        .citation-anchor { display: block; padding: 8px 12px; margin: 4px 0; background: #e3f2fd; border-radius: 4px; font-size: 14px; color: #1565c0; text-decoration: none; transition: all 0.3s; }
+        .citation-anchor:hover { background: #bbdefb; }
+        .export-button { background: #10b981; }
+        .export-button:hover { background: #059669; }
+        .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+        :focus-visible { outline: 2px solid #8b5cf6; outline-offset: 2px; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .loading { animation: pulse 1.5s ease-in-out infinite; }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+    <div class="container mx-auto p-4 md:p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl md:text-4xl font-bold text-gray-900">🧠 Advanced PDF Q&A Research Platform</h1>
+            <p class="text-md text-gray-600 mt-2">Upload PDFs, ask questions, get cited answers with visual highlighting and comprehensive research history.</p>
+            <div class="mt-4 flex justify-center gap-4 text-sm text-gray-500">
+                <span>🤖 Powered by Claude AI</span>
+                <span>📊 Citation Tracking</span>
+                <span>📚 Research History</span>
+                <span>📤 Export Reports</span>
+            </div>
+        </header>
+
+        <!-- Alert Messages -->
+        <div id="alert-container" class="hidden mb-6">
+            <div id="alert" class="p-4 rounded-lg border" role="alert" aria-live="assertive">
+                <span id="alert-message"></span>
+            </div>
+        </div>
+
+        <main class="bg-white p-6 rounded-lg shadow-lg">
+            <!-- Upload Section -->
+            <div id="upload-section" class="mb-6 text-center">
+                <label for="pdf-upload" class="cursor-pointer inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500" aria-describedby="upload-help">
+                    <svg class="w-5 h-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+                    Upload PDF for Analysis
+                </label>
+                <input type="file" id="pdf-upload" class="sr-only" accept="application/pdf" aria-describedby="upload-help">
+                <p id="upload-help" class="sr-only">Upload a PDF document to analyze with AI-powered Q&A</p>
+                <p id="file-name" class="mt-3 text-gray-500"></p>
+            </div>
+
+            <!-- Main Content Area -->
+            <div id="content-area" class="hidden">
+                <div class="flex flex-col lg:flex-row gap-8">
+                    <!-- Left Column: PDF Viewer -->
+                    <div class="flex-grow lg:w-2/3">
+                        <div class="flex justify-between items-center mb-4">
+                            <h2 class="text-xl font-semibold">Document Viewer</h2>
+                            <div class="flex gap-2">
+                                <button id="export-markdown" class="export-button text-white px-3 py-1 rounded text-sm hover:bg-green-600" aria-label="Export research as Markdown">
+                                    📝 Export MD
+                                </button>
+                                <button id="export-html" class="export-button text-white px-3 py-1 rounded text-sm hover:bg-green-600" aria-label="Export research as HTML">
+                                    🌐 Export HTML
+                                </button>
+                                <button id="export-json" class="export-button text-white px-3 py-1 rounded text-sm hover:bg-green-600" aria-label="Export research data as JSON">
+                                    📊 Export JSON
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div id="pdf-controls" class="flex items-center justify-between bg-gray-100 p-2 rounded-md mb-2">
+                            <button id="prev-page" class="px-3 py-1 bg-gray-300 rounded hover:bg-gray-400 disabled:opacity-50 disabled:cursor-not-allowed" aria-label="Previous page">&lt; Prev</button>
+                            <span id="page-num" class="text-sm">Page 1 of 1</span>
+                            <button id="next-page" class="px-3 py-1 bg-gray-300 rounded hover:bg-gray-400 disabled:opacity-50 disabled:cursor-not-allowed" aria-label="Next page">Next &gt;</button>
+                        </div>
+                        
+                        <div id="pdf-canvas-container" class="rounded-lg border bg-gray-50 mb-6">
+                           <!-- Canvas and Citation Highlights will be added here -->
+                        </div>
+
+                        <!-- Citation Anchors Panel -->
+                        <div id="citation-anchors" class="hidden bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                            <h3 class="text-lg font-semibold text-blue-800 mb-2">🔗 Citation Quick Jump</h3>
+                            <div id="anchors-list" class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                <!-- Citation anchors will be populated here -->
+                            </div>
+                        </div>
+
+                        <!-- Citations Panel -->
+                        <div id="citations-panel" class="hidden bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                            <h3 class="text-lg font-semibold text-blue-800 mb-2">📑 Source Citations</h3>
+                            <div id="citations-list" class="space-y-2">
+                                <!-- Citations will be populated here -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: AI Tools and History -->
+                    <div class="lg:w-1/3">
+                        <h2 class="text-xl font-semibold mb-2">🧠 Claude Q&A</h2>
+                        <div class="space-y-4">
+                            <div>
+                                <label for="question-input" class="sr-only">Enter your question about the PDF</label>
+                                <textarea id="question-input" rows="3" class="w-full p-2 border rounded-md focus:ring-2 focus:ring-purple-500" placeholder="Ask a question about this PDF..." aria-describedby="question-help"></textarea>
+                                <span id="question-help" class="sr-only">Enter your question and Claude will analyze the PDF to provide an answer with citations</span>
+                            </div>
+                            
+                            <button id="ask-button" class="w-full px-4 py-2 bg-purple-600 text-white font-semibold rounded-md hover:bg-purple-700 disabled:bg-purple-300" aria-label="Ask Claude about the PDF">
+                                <span id="ask-button-text">Ask Claude</span>
+                                <span id="ask-spinner" class="hidden"><svg class="animate-spin h-5 w-5 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg></span>
+                            </button>
+
+                            <div id="answer-area" class="mt-4 hidden">
+                                <h3 class="text-lg font-semibold mb-2">Claude's Answer</h3>
+                                <div id="answer-text" class="p-4 bg-gray-50 rounded-md border border-gray-200 text-gray-700 whitespace-pre-wrap"></div>
+                                
+                                <div id="usage-info" class="mt-2 text-xs text-gray-500">
+                                    <!-- Token usage info will appear here -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Research Tools -->
+                        <div class="mt-8">
+                            <h3 class="text-lg font-semibold mb-2">🔬 Research Tools</h3>
+                            <div class="space-y-2">
+                                <button id="search-history" class="w-full px-3 py-2 bg-gray-600 text-white text-sm rounded hover:bg-gray-700" aria-label="Search through research history">
+                                    🔍 Search History
+                                </button>
+                                <button id="clear-history" class="w-full px-3 py-2 bg-red-600 text-white text-sm rounded hover:bg-red-700" aria-label="Clear all research history">
+                                    🗑️ Clear History
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- History Section -->
+                        <div id="history-section" class="mt-8">
+                            <h2 class="text-xl font-semibold mb-2">📚 Research History</h2>
+                            <div id="history-stats" class="text-xs text-gray-500 mb-2">
+                                <!-- History statistics will appear here -->
+                            </div>
+                            <div id="history-container" class="space-y-4 max-h-96 overflow-y-auto p-3 bg-gray-50 rounded-lg border">
+                                <!-- History items will be injected here -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div id="status-message" class="mt-4 text-center text-gray-600"></div>
+        </main>
+        
+        <footer class="text-center mt-8 text-xs text-gray-400">
+            <p>🧠 Powered by Claude AI with Citations • 📄 PDF processing with PDF.js • 🔬 Advanced Research Platform</p>
+            <p class="mt-1">Built for researchers, students, and knowledge workers</p>
+        </footer>
+    </div>
+
+    <!-- Search Modal -->
+    <div id="search-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white p-6 rounded-lg max-w-md w-full mx-4">
+            <h3 class="text-lg font-semibold mb-4">🔍 Search Research History</h3>
+            <input type="text" id="search-input" class="w-full p-2 border rounded mb-4" placeholder="Search questions, answers, or citations...">
+            <div class="flex gap-2 justify-end">
+                <button id="search-cancel" class="px-4 py-2 bg-gray-300 rounded">Cancel</button>
+                <button id="search-submit" class="px-4 py-2 bg-purple-600 text-white rounded">Search</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // === Configuration ===
+        const API_BASE_URL = window.location.hostname === 'localhost' 
+            ? 'http://localhost:5002/api'
+            : 'https://your-backend-url.railway.app/api';
+
+        // === DOM Elements ===
+        const uploadSection = document.getElementById('upload-section');
+        const contentArea = document.getElementById('content-area');
+        const pdfUpload = document.getElementById('pdf-upload');
+        let currentPdfName = '';
+        let currentPdfFile = null;
+        const fileNameDisplay = document.getElementById('file-name');
+        const pdfCanvasContainer = document.getElementById('pdf-canvas-container');
+        const prevPageBtn = document.getElementById('prev-page');
+        const nextPageBtn = document.getElementById('next-page');
+        const pageNumDisplay = document.getElementById('page-num');
+        const questionInput = document.getElementById('question-input');
+        const askButton = document.getElementById('ask-button');
+        let answerArea = document.getElementById('answer-area');
+        let answerText = document.getElementById('answer-text');
+        const citationsPanel = document.getElementById('citations-panel');
+        const citationsList = document.getElementById('citations-list');
+        const citationAnchors = document.getElementById('citation-anchors');
+        const anchorsList = document.getElementById('anchors-list');
+        const usageInfo = document.getElementById('usage-info');
+        const statusMessage = document.getElementById('status-message');
+        const historyContainer = document.getElementById('history-container');
+        const historyStats = document.getElementById('history-stats');
+        const alertContainer = document.getElementById('alert-container');
+        const alertMessage = document.getElementById('alert-message');
+
+        // === State Variables ===
+        let pdfDoc = null;
+        let currentPageNum = 1;
+        let pageRendering = false;
+        let pageTextContents = [];
+        let currentCitations = [];
+        let researchSession = {
+            startTime: new Date(),
+            documentCount: 0,
+            questionCount: 0,
+            citationCount: 0
+        };
+
+        // === Alert System ===
+        function showAlert(type, message, duration = 5000) {
+            const alert = document.getElementById('alert');
+            alert.className = `p-4 rounded-lg border ${
+                type === 'error' ? 'bg-red-50 text-red-800 border-red-200' :
+                type === 'success' ? 'bg-green-50 text-green-800 border-green-200' :
+                type === 'warning' ? 'bg-yellow-50 text-yellow-800 border-yellow-200' :
+                'bg-blue-50 text-blue-800 border-blue-200'
+            }`;
+            alertMessage.textContent = message;
+            alertContainer.classList.remove('hidden');
+            
+            if (duration > 0) {
+                setTimeout(() => alertContainer.classList.add('hidden'), duration);
+            }
+        }
+
+        // === Export Functions ===
+        function downloadFile(filename, content, type = 'text/plain') {
+            const blob = new Blob([content], { type: type + ';charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            a.click();
+            URL.revokeObjectURL(a.href);
+        }
+
+        function generateMarkdownReport() {
+            const history = getHistory();
+            const stats = {
+                documents: [...new Set(history.map(h => h.pdfName))].length,
+                questions: history.length,
+                citations: history.reduce((acc, h) => acc + (h.citations?.length || 0), 0)
+            };
+
+            let markdown = `# PDF Q&A Research Report
+
+**Generated:** ${new Date().toLocaleString()}  
+**Documents Analyzed:** ${stats.documents}  
+**Questions Asked:** ${stats.questions}  
+**Citations Found:** ${stats.citations}  
+
+---
+
+## Research Session Summary
+
+`;
+
+            history.forEach((entry, index) => {
+                markdown += `### ${index + 1}. ${entry.question}
+
+**Document:** ${entry.pdfName}  
+**Timestamp:** ${new Date(entry.timestamp).toLocaleString()}  
+
+**Answer:**  
+${entry.answer}
+
+`;
+                if (entry.citations && entry.citations.length > 0) {
+                    markdown += `**Citations:**  
+`;
+                    entry.citations.forEach((citation, citIndex) => {
+                        markdown += `${citIndex + 1}. "${citation.cited_text || 'Citation text not available'}"`;
+                        if (citation.page_number) markdown += ` (Page ${citation.page_number})`;
+                        markdown += `  
+`;
+                    });
+                }
+                markdown += `
+
+---
+
+`;
+            });
+
+            return markdown;
+        }
+
+        function generateHTMLReport() {
+            const markdown = generateMarkdownReport();
+            return `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Q&A Research Report</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; line-height: 1.6; max-width: 800px; margin: 0 auto; padding: 20px; color: #333; }
+        h1 { color: #2c3e50; border-bottom: 3px solid #3498db; padding-bottom: 10px; }
+        h2 { color: #34495e; margin-top: 30px; }
+        h3 { color: #7f8c8d; margin-top: 25px; }
+        blockquote { background: #f8f9fa; border-left: 4px solid #3498db; padding: 15px; margin: 15px 0; }
+        .stats { background: #ecf0f1; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .citation { background: #e8f4f8; padding: 10px; margin: 5px 0; border-radius: 3px; }
+        hr { border: none; border-top: 1px solid #bdc3c7; margin: 30px 0; }
+    </style>
+</head>
+<body>
+    <pre>${markdown.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+</body>
+</html>`;
+        }
+
+        function generateJSONReport() {
+            const history = getHistory();
+            return JSON.stringify({
+                metadata: {
+                    generatedAt: new Date().toISOString(),
+                    platform: "Advanced PDF Q&A Research Platform",
+                    version: "1.0.0"
+                },
+                session: researchSession,
+                statistics: {
+                    documents: [...new Set(history.map(h => h.pdfName))].length,
+                    questions: history.length,
+                    citations: history.reduce((acc, h) => acc + (h.citations?.length || 0), 0)
+                },
+                research: history
+            }, null, 2);
+        }
+
+        // Export event listeners
+        document.getElementById('export-markdown').addEventListener('click', () => {
+            try {
+                const markdown = generateMarkdownReport();
+                downloadFile(`research-report-${new Date().toISOString().split('T')[0]}.md`, markdown);
+                showAlert('success', '✅ Markdown report exported successfully');
+            } catch (e) {
+                showAlert('error', `❌ Export failed: ${e.message}`);
+            }
+        });
+
+        document.getElementById('export-html').addEventListener('click', () => {
+            try {
+                const html = generateHTMLReport();
+                downloadFile(`research-report-${new Date().toISOString().split('T')[0]}.html`, html, 'text/html');
+                showAlert('success', '✅ HTML report exported successfully');
+            } catch (e) {
+                showAlert('error', `❌ Export failed: ${e.message}`);
+            }
+        });
+
+        document.getElementById('export-json').addEventListener('click', () => {
+            try {
+                const json = generateJSONReport();
+                downloadFile(`research-data-${new Date().toISOString().split('T')[0]}.json`, json, 'application/json');
+                showAlert('success', '✅ JSON data exported successfully');
+            } catch (e) {
+                showAlert('error', `❌ Export failed: ${e.message}`);
+            }
+        });
+
+        // === PDF Handling ===
+        pdfUpload.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file && file.type === 'application/pdf') {
+                currentPdfName = file.name;
+                currentPdfFile = file;
+                fileNameDisplay.textContent = `File: ${file.name}`;
+                statusMessage.textContent = 'Loading and parsing PDF...';
+                
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    try {
+                        await loadAndParsePdf(new Uint8Array(e.target.result));
+                        contentArea.classList.remove('hidden');
+                        uploadSection.classList.add('hidden');
+                        statusMessage.textContent = 'PDF processed. Ready for Claude Q&A with citations.';
+                        researchSession.documentCount++;
+                        renderHistory();
+                        showAlert('success', '✅ PDF loaded successfully');
+                    } catch(err) {
+                        console.error("Error processing PDF:", err);
+                        statusMessage.textContent = `Error: ${err.message}`;
+                        showAlert('error', `❌ PDF processing failed: ${err.message}`);
+                    }
+                };
+                reader.readAsArrayBuffer(file);
+            }
+        });
+
+        async function loadAndParsePdf(pdfData) {
+            pdfDoc = await pdfjsLib.getDocument({ data: pdfData }).promise;
+            await parseAllPages();
+            await renderPage(1);
+        }
+
+        async function renderPage(num) {
+            if (pageRendering) return;
+            pageRendering = true;
+            currentPageNum = num;
+            pdfCanvasContainer.innerHTML = '';
+            
+            const page = await pdfDoc.getPage(num);
+            const viewport = page.getViewport({ scale: 1.5 });
+            const canvas = document.createElement('canvas');
+            canvas.id = 'pdf-canvas';
+            canvas.height = viewport.height;
+            canvas.width = viewport.width;
+            pdfCanvasContainer.appendChild(canvas);
+            
+            await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+            pageNumDisplay.textContent = `Page ${num} of ${pdfDoc.numPages}`;
+            updatePageControls();
+            pageRendering = false;
+        }
+        
+        async function parseAllPages() {
+            pageTextContents = [];
+            for (let i = 1; i <= pdfDoc.numPages; i++) {
+                const page = await pdfDoc.getPage(i);
+                const textContent = await page.getTextContent();
+                pageTextContents[i] = textContent.items;
+            }
+        }
+
+        function updatePageControls() {
+            prevPageBtn.disabled = currentPageNum <= 1;
+            nextPageBtn.disabled = currentPageNum >= pdfDoc.numPages;
+        }
+
+        prevPageBtn.addEventListener('click', () => {
+            if (currentPageNum <= 1 || pageRendering) return;
+            renderPage(currentPageNum - 1).then(clearAllOutputs);
+        });
+
+        nextPageBtn.addEventListener('click', () => {
+            if (currentPageNum >= pdfDoc.numPages || pageRendering) return;
+            renderPage(currentPageNum + 1).then(clearAllOutputs);
+        });
+
+        // === Claude API Integration ===
+        askButton.addEventListener('click', async () => {
+            const question = questionInput.value.trim();
+            if (!question) { 
+                showAlert('warning', '⚠️ Please enter a question');
+                return; 
+            }
+            if (!currentPdfFile) { 
+                showAlert('warning', '⚠️ Please upload a PDF first');
+                return; 
+            }
+
+            toggleLoading('ask', true);
+            clearAllOutputs();
+            researchSession.questionCount++;
+
+            try {
+                const formData = new FormData();
+                formData.append('pdf', currentPdfFile);
+                formData.append('question', question);
+
+                const response = await fetch(`${API_BASE_URL}/ask-with-citations`, {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`API call failed: ${response.status}`);
+                }
+                
+                const result = await response.json();
+                
+                displayAnswerWithCitations(result.answer, result.citations || [], result.usage);
+                researchSession.citationCount += (result.citations?.length || 0);
+                
+                if (result.citations && result.citations.length > 0) {
+                    await highlightCitationsInPDF(result.citations);
+                    createCitationAnchors(result.citations);
+                }
+                
+                const pageImage = document.getElementById('pdf-canvas')?.toDataURL('image/jpeg', 0.4) || '';
+                saveHistoryEntry({
+                    id: Date.now(),
+                    pdfName: currentPdfName,
+                    question,
+                    answer: result.answer,
+                    citations: result.citations || [],
+                    pageImage: pageImage,
+                    timestamp: new Date().toISOString()
+                });
+
+                questionInput.value = '';
+                showAlert('success', `✅ Answer generated with ${result.citations?.length || 0} citations`);
+
+            } catch(error) {
+                console.error("Error with Claude Q&A:", error);
+                displayAnswerWithCitations(`An error occurred: ${error.message}`, []);
+                showAlert('error', `❌ Failed to get answer: ${error.message}`);
+            } finally {
+                toggleLoading('ask', false);
+            }
+        });
+
+        // === Citation Functions ===
+        function displayAnswerWithCitations(answer, citations, usage) {
+            answerText.textContent = answer;
+            answerArea.classList.remove('hidden');
+            
+            if (usage) {
+                usageInfo.textContent = `Tokens used: ${usage.input_tokens} input, ${usage.output_tokens} output`;
+            }
+            
+            currentCitations = citations;
+            
+            if (citations && citations.length > 0) {
+                displayCitations(citations);
+                citationsPanel.classList.remove('hidden');
+            } else {
+                citationsPanel.classList.add('hidden');
+            }
+        }
+
+        function displayCitations(citations) {
+            citationsList.innerHTML = '';
+            
+            citations.forEach((citation, index) => {
+                const citationElement = document.createElement('div');
+                citationElement.className = 'citation-item p-3 bg-white border border-blue-200 rounded-md cursor-pointer hover:bg-blue-50 transition-colors';
+                
+                citationElement.innerHTML = `
+                    <div class="flex items-start gap-3">
+                        <span class="inline-flex items-center justify-center w-6 h-6 bg-blue-500 text-white text-xs font-semibold rounded-full flex-shrink-0">${index + 1}</span>
+                        <div class="flex-grow">
+                            <p class="text-sm text-gray-700 mb-1">"${citation.cited_text || 'Citation text not available'}"</p>
+                            <p class="text-xs text-blue-600">
+                                ${citation.document_name || 'Document'} 
+                                ${citation.page_number ? `• Page ${citation.page_number}` : ''}
+                                ${citation.start_char ? `• Char ${citation.start_char}-${citation.end_char}` : ''}
+                            </p>
+                        </div>
+                    </div>
+                `;
+                
+                citationElement.addEventListener('click', () => {
+                    highlightCitation(citation, index);
+                });
+                
+                citationsList.appendChild(citationElement);
+            });
+        }
+
+        function createCitationAnchors(citations) {
+            anchorsList.innerHTML = '';
+            
+            if (citations.length === 0) {
+                citationAnchors.classList.add('hidden');
+                return;
+            }
+
+            citations.forEach((citation, index) => {
+                const anchor = document.createElement('a');
+                anchor.className = 'citation-anchor block';
+                anchor.href = '#';
+                anchor.innerHTML = `
+                    <span class="font-semibold">${index + 1}.</span>
+                    "${citation.cited_text?.substring(0, 60) || 'Citation'}..."
+                    ${citation.page_number ? `<span class="text-xs">(Page ${citation.page_number})</span>` : ''}
+                `;
+                
+                anchor.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    highlightCitation(citation, index);
+                });
+                
+                anchorsList.appendChild(anchor);
+            });
+            
+            citationAnchors.classList.remove('hidden');
+        }
+
+        async function highlightCitation(citation, index) {
+            if (citation.page_number && citation.page_number !== currentPageNum) {
+                await renderPage(citation.page_number);
+            }
+            
+            const citationItems = document.querySelectorAll('.citation-item');
+            citationItems.forEach((item, i) => {
+                if (i === index) {
+                    item.classList.add('ring-2', 'ring-blue-400');
+                } else {
+                    item.classList.remove('ring-2', 'ring-blue-400');
+                }
+            });
+            
+            clearPDFHighlights();
+            if (citation.cited_text) {
+                const itemsToHighlight = await findQuoteItemsOnPage(citation.cited_text);
+                if (itemsToHighlight.length > 0) {
+                    await drawHighlights(itemsToHighlight, 'citation');
+                }
+            }
+            
+            statusMessage.textContent = `Showing citation ${index + 1}: "${citation.cited_text?.substring(0, 50) || 'N/A'}..."`;
+        }
+        
+        async function highlightCitationsInPDF(citations) {
+            clearPDFHighlights();
+            
+            for (let i = 0; i < citations.length; i++) {
+                const citation = citations[i];
+                if (citation.cited_text && citation.page_number === currentPageNum) {
+                    const itemsToHighlight = await findQuoteItemsOnPage(citation.cited_text);
+                    if (itemsToHighlight.length > 0) {
+                        await drawHighlights(itemsToHighlight, 'citation', i);
+                    }
+                }
+            }
+        }
+        
+        async function findQuoteItemsOnPage(quote) {
+            const pageItems = pageTextContents[currentPageNum] || [];
+            if (!quote || pageItems.length === 0) return [];
+            
+            const normalizedQuote = quote.replace(/\\s+/g, '').toLowerCase();
+            
+            for (let i = 0; i < pageItems.length; i++) {
+                let textWindow = '';
+                let foundItems = [];
+                for (let j = i; j < pageItems.length; j++) {
+                    textWindow += pageItems[j].str;
+                    foundItems.push(pageItems[j]);
+                    if (textWindow.replace(/\\s+/g, '').toLowerCase().includes(normalizedQuote)) {
+                        return foundItems;
+                    }
+                }
+            }
+            return [];
+        }
+        
+        async function drawHighlights(itemsToHighlight, type = 'citation', citationIndex = 0) {
+            const page = await pdfDoc.getPage(currentPageNum);
+            const viewport = page.getViewport({ scale: 1.5 });
+            
+            itemsToHighlight.forEach((item, index) => {
+                const [,, , , x, y] = item.transform;
+                const highlight = document.createElement('div');
+                
+                highlight.className = 'citation-highlight';
+                highlight.dataset.citationIndex = citationIndex;
+                
+                highlight.style.left = `${x}px`;
+                highlight.style.top = `${viewport.height - y}px`;
+                highlight.style.width = `${item.width}px`;
+                highlight.style.height = `${item.height}px`;
+                highlight.style.transform = `translateY(-100%)`;
+                
+                pdfCanvasContainer.appendChild(highlight);
+            });
+        }
+        
+        function clearPDFHighlights() {
+            document.querySelectorAll('.citation-highlight').forEach(highlight => highlight.remove());
+        }
+
+        // === History Functions ===
+        function getHistory() { 
+            return JSON.parse(sessionStorage.getItem('claude_pdf_qa_history') || '[]'); 
+        }
+        
+        function saveHistoryEntry(entry) {
+            const history = getHistory();
+            history.unshift(entry);
+            if (history.length > 50) history.pop();
+            sessionStorage.setItem('claude_pdf_qa_history', JSON.stringify(history));
+            renderHistory();
+        }
+        
+        function renderHistory() {
+            const history = getHistory();
+            historyContainer.innerHTML = '';
+            
+            // Update statistics
+            const stats = {
+                total: history.length,
+                documents: [...new Set(history.map(h => h.pdfName))].length,
+                citations: history.reduce((acc, h) => acc + (h.citations?.length || 0), 0)
+            };
+            historyStats.textContent = `${stats.total} questions • ${stats.documents} documents • ${stats.citations} citations`;
+            
+            if (history.length === 0) {
+                historyContainer.innerHTML = `<p class="text-gray-500 text-center">No research history yet.</p>`;
+                return;
+            }
+            
+            history.forEach(entry => {
+                const item = document.createElement('div');
+                item.className = 'history-item p-4 border rounded-lg hover:shadow-md transition-shadow';
+                
+                const citationCount = entry.citations ? entry.citations.length : 0;
+                const timestamp = new Date(entry.timestamp).toLocaleString();
+                
+                item.innerHTML = `
+                    <div class="flex gap-4">
+                        ${entry.pageImage ? `<img src="${entry.pageImage}" alt="Page snapshot" class="w-16 h-20 object-cover border rounded-md flex-shrink-0">` : ''}
+                        <div class="flex-grow min-w-0 space-y-2">
+                            <p class="font-semibold text-gray-800 text-sm break-words">Q: ${entry.question}</p>
+                            <p class="text-xs text-gray-600 break-words line-clamp-3">A: ${entry.answer}</p>
+                            <div class="flex justify-between items-center text-xs text-gray-400">
+                                <span class="truncate">${entry.pdfName}</span>
+                                <span class="flex-shrink-0">${citationCount} citations • ${timestamp}</span>
+                            </div>
+                        </div>
+                    </div>
+                `;
+                
+                item.addEventListener('click', async () => {
+                    if (currentPdfName !== entry.pdfName) {
+                        showAlert('warning', `⚠️ Please upload the correct PDF: ${entry.pdfName}`);
+                        return;
+                    }
+                    
+                    clearAllOutputs();
+                    displayAnswerWithCitations(entry.answer, entry.citations || []);
+                    
+                    if (entry.citations && entry.citations.length > 0) {
+                        await highlightCitationsInPDF(entry.citations);
+                        createCitationAnchors(entry.citations);
+                    }
+                    
+                    showAlert('info', `📖 Loaded previous research result`);
+                });
+                
+                historyContainer.appendChild(item);
+            });
+        }
+
+        // === Search Functionality ===
+        document.getElementById('search-history').addEventListener('click', () => {
+            document.getElementById('search-modal').classList.remove('hidden');
+            document.getElementById('search-input').focus();
+        });
+
+        document.getElementById('search-cancel').addEventListener('click', () => {
+            document.getElementById('search-modal').classList.add('hidden');
+            document.getElementById('search-input').value = '';
+        });
+
+        document.getElementById('search-submit').addEventListener('click', () => {
+            const query = document.getElementById('search-input').value.toLowerCase();
+            if (!query) return;
+            
+            const history = getHistory();
+            const results = history.filter(entry => 
+                entry.question.toLowerCase().includes(query) ||
+                entry.answer.toLowerCase().includes(query) ||
+                entry.pdfName.toLowerCase().includes(query) ||
+                (entry.citations && entry.citations.some(c => 
+                    c.cited_text && c.cited_text.toLowerCase().includes(query)
+                ))
+            );
+            
+            historyContainer.innerHTML = '';
+            if (results.length === 0) {
+                historyContainer.innerHTML = `<p class="text-gray-500 text-center">No results found for "${query}"</p>`;
+            } else {
+                results.forEach(entry => {
+                    // Use same rendering logic as renderHistory
+                    const item = document.createElement('div');
+                    item.className = 'history-item p-4 border rounded-lg hover:shadow-md transition-shadow bg-yellow-50';
+                    item.innerHTML = `
+                        <div class="flex gap-4">
+                            ${entry.pageImage ? `<img src="${entry.pageImage}" alt="Page snapshot" class="w-16 h-20 object-cover border rounded-md flex-shrink-0">` : ''}
+                            <div class="flex-grow min-w-0 space-y-2">
+                                <p class="font-semibold text-gray-800 text-sm break-words">Q: ${entry.question}</p>
+                                <p class="text-xs text-gray-600 break-words line-clamp-3">A: ${entry.answer}</p>
+                                <div class="text-xs text-gray-400">
+                                    <span>${entry.pdfName} • ${entry.citations?.length || 0} citations</span>
+                                </div>
+                            </div>
+                        </div>
+                    `;
+                    historyContainer.appendChild(item);
+                });
+                showAlert('success', `🔍 Found ${results.length} results`);
+            }
+            
+            document.getElementById('search-modal').classList.add('hidden');
+            document.getElementById('search-input').value = '';
+        });
+
+        document.getElementById('clear-history').addEventListener('click', () => {
+            if (confirm('Are you sure you want to clear all research history?')) {
+                sessionStorage.removeItem('claude_pdf_qa_history');
+                renderHistory();
+                showAlert('success', '🗑️ Research history cleared');
+            }
+        });
+
+        // === Utility Functions ===
+        function clearAllOutputs() {
+            clearPDFHighlights();
+            answerArea.classList.add('hidden');
+            citationsPanel.classList.add('hidden');
+            citationAnchors.classList.add('hidden');
+            currentCitations = [];
+            usageInfo.textContent = '';
+            document.querySelectorAll('.citation-item').forEach(item => {
+                item.classList.remove('ring-2', 'ring-blue-400');
+            });
+        }
+        
+        function toggleLoading(buttonType, isLoading) {
+            const map = {
+                ask: { btn: askButton, text: 'ask-button-text', spin: 'ask-spinner' }
+            };
+            const { btn, text, spin } = map[buttonType];
+            btn.disabled = isLoading;
+            document.getElementById(text).classList.toggle('hidden', isLoading);
+            document.getElementById(spin).classList.toggle('hidden', !isLoading);
+        }
+
+        // === Keyboard Shortcuts ===
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey || e.metaKey) {
+                if (e.key === 'Enter' && questionInput.value.trim()) {
+                    e.preventDefault();
+                    askButton.click();
+                }
+                if (e.key === 's') {
+                    e.preventDefault();
+                    document.getElementById('search-history').click();
+                }
+            }
+        });
+
+        // === Initialize ===
+        document.addEventListener('DOMContentLoaded', () => {
+            renderHistory();
+            showAlert('info', '🚀 Advanced PDF Q&A Research Platform loaded. Upload a PDF to begin.', 3000);
+        });
+    </script>
+</body>
+</html>

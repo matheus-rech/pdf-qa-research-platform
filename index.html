@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Advanced PDF Q&A Research Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+    <script>
+        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js`;
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        #pdf-canvas-container { position: relative; box-shadow: 0 4px 12px rgba(0,0,0,0.15); overflow: auto; }
+        .citation-highlight { position: absolute; background-color: rgba(59, 130, 246, 0.3); border: 2px solid rgba(59, 130, 246, 0.6); border-radius: 4px; z-index: 10; pointer-events: none; }
+        .api-key-input { background: #fef3c7; border: 2px solid #f59e0b; }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div class="container mx-auto p-4 md:p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-900">🧠 Advanced PDF Q&A Research Platform</h1>
+            <p class="text-gray-600 mt-2">Upload PDFs and ask questions with AI-powered citation tracking</p>
+            <div class="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+                <p class="text-sm text-yellow-800">
+                    <strong>Free Version:</strong> You need your own Anthropic API key. 
+                    <a href="https://console.anthropic.com" target="_blank" class="underline">Get one here</a> 
+                    (usually $5 credit free for new users)
+                </p>
+            </div>
+        </header>
+
+        <!-- API Key Setup -->
+        <div id="api-setup" class="bg-white p-6 rounded-lg shadow-lg mb-6">
+            <h2 class="text-xl font-semibold mb-4">🔑 API Key Setup</h2>
+            <div class="space-y-4">
+                <div>
+                    <label for="api-key" class="block text-sm font-medium text-gray-700 mb-2">
+                        Anthropic API Key (stored locally in your browser)
+                    </label>
+                    <input 
+                        type="password" 
+                        id="api-key" 
+                        placeholder="sk-ant-api03-..." 
+                        class="w-full p-3 border rounded-md api-key-input"
+                    >
+                    <p class="text-xs text-gray-500 mt-1">
+                        Your API key is stored locally and never sent to our servers
+                    </p>
+                </div>
+                <button id="save-key" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+                    Save API Key
+                </button>
+                <div id="key-status" class="text-sm hidden"></div>
+            </div>
+        </div>
+
+        <!-- Main App (hidden until API key is set) -->
+        <div id="main-app" class="hidden">
+            <div class="bg-white p-6 rounded-lg shadow-lg">
+                <!-- Upload Section -->
+                <div id="upload-section" class="mb-6 text-center">
+                    <label for="pdf-upload" class="cursor-pointer inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-purple-600 hover:bg-purple-700">
+                        📄 Upload PDF
+                    </label>
+                    <input type="file" id="pdf-upload" class="hidden" accept="application/pdf">
+                    <p id="file-name" class="mt-3 text-gray-500"></p>
+                </div>
+
+                <!-- PDF Viewer -->
+                <div id="content-area" class="hidden">
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <!-- PDF Viewer -->
+                        <div class="lg:col-span-2">
+                            <h3 class="text-lg font-semibold mb-2">Document Viewer</h3>
+                            <div id="pdf-controls" class="flex items-center justify-between bg-gray-100 p-2 rounded-md mb-2">
+                                <button id="prev-page" class="px-3 py-1 bg-gray-300 rounded disabled:opacity-50">&lt; Prev</button>
+                                <span id="page-num">Page 1 of 1</span>
+                                <button id="next-page" class="px-3 py-1 bg-gray-300 rounded disabled:opacity-50">Next &gt;</button>
+                            </div>
+                            <div id="pdf-canvas-container" class="border rounded-lg bg-gray-50">
+                                <!-- PDF canvas will be inserted here -->
+                            </div>
+                        </div>
+
+                        <!-- Q&A Panel -->
+                        <div>
+                            <h3 class="text-lg font-semibold mb-2">Ask Questions</h3>
+                            <div class="space-y-4">
+                                <textarea 
+                                    id="question-input" 
+                                    rows="3" 
+                                    placeholder="Ask about this PDF..."
+                                    class="w-full p-2 border rounded"
+                                ></textarea>
+                                <button id="ask-button" class="w-full bg-purple-600 text-white py-2 rounded hover:bg-purple-700 disabled:bg-gray-400">
+                                    <span id="ask-text">Ask Claude</span>
+                                    <span id="ask-spinner" class="hidden">⏳ Processing...</span>
+                                </button>
+                                
+                                <!-- Answer Area -->
+                                <div id="answer-area" class="hidden">
+                                    <h4 class="font-semibold mb-2">Answer:</h4>
+                                    <div id="answer-text" class="p-3 bg-gray-50 border rounded whitespace-pre-wrap"></div>
+                                    
+                                    <!-- Citations -->
+                                    <div id="citations-panel" class="hidden mt-4">
+                                        <h4 class="font-semibold mb-2">Citations:</h4>
+                                        <div id="citations-list" class="space-y-2"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // === State Management ===
+        let apiKey = localStorage.getItem('anthropic_api_key') || '';
+        let pdfDoc = null;
+        let currentPageNum = 1;
+        let pageTextContents = [];
+        let currentPdfFile = null;
+
+        // === DOM Elements ===
+        const apiKeyInput = document.getElementById('api-key');
+        const saveKeyBtn = document.getElementById('save-key');
+        const keyStatus = document.getElementById('key-status');
+        const mainApp = document.getElementById('main-app');
+        const apiSetup = document.getElementById('api-setup');
+        const pdfUpload = document.getElementById('pdf-upload');
+        const fileNameDisplay = document.getElementById('file-name');
+        const contentArea = document.getElementById('content-area');
+        const pdfCanvasContainer = document.getElementById('pdf-canvas-container');
+        const prevPageBtn = document.getElementById('prev-page');
+        const nextPageBtn = document.getElementById('next-page');
+        const pageNumDisplay = document.getElementById('page-num');
+        const questionInput = document.getElementById('question-input');
+        const askButton = document.getElementById('ask-button');
+        const askText = document.getElementById('ask-text');
+        const askSpinner = document.getElementById('ask-spinner');
+        const answerArea = document.getElementById('answer-area');
+        const answerText = document.getElementById('answer-text');
+        const citationsPanel = document.getElementById('citations-panel');
+        const citationsList = document.getElementById('citations-list');
+
+        // === Initialize ===
+        if (apiKey) {
+            apiKeyInput.value = apiKey;
+            showMainApp();
+        }
+
+        // === API Key Management ===
+        saveKeyBtn.addEventListener('click', () => {
+            const key = apiKeyInput.value.trim();
+            if (!key.startsWith('sk-ant-')) {
+                showStatus('error', 'Invalid API key format');
+                return;
+            }
+            
+            localStorage.setItem('anthropic_api_key', key);
+            apiKey = key;
+            showStatus('success', 'API key saved successfully!');
+            setTimeout(showMainApp, 1000);
+        });
+
+        function showStatus(type, message) {
+            keyStatus.textContent = message;
+            keyStatus.className = `text-sm ${type === 'error' ? 'text-red-600' : 'text-green-600'}`;
+            keyStatus.classList.remove('hidden');
+        }
+
+        function showMainApp() {
+            apiSetup.classList.add('hidden');
+            mainApp.classList.remove('hidden');
+        }
+
+        // === PDF Upload ===
+        pdfUpload.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file || file.type !== 'application/pdf') return;
+            
+            currentPdfFile = file;
+            fileNameDisplay.textContent = `File: ${file.name}`;
+            
+            const arrayBuffer = await file.arrayBuffer();
+            pdfDoc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            
+            await parseAllPages();
+            await renderPage(1);
+            contentArea.classList.remove('hidden');
+        });
+
+        async function parseAllPages() {
+            pageTextContents = [];
+            for (let i = 1; i <= pdfDoc.numPages; i++) {
+                const page = await pdfDoc.getPage(i);
+                const textContent = await page.getTextContent();
+                pageTextContents[i] = textContent.items;
+            }
+        }
+
+        async function renderPage(num) {
+            currentPageNum = num;
+            pdfCanvasContainer.innerHTML = '';
+            
+            const page = await pdfDoc.getPage(num);
+            const viewport = page.getViewport({ scale: 1.5 });
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            pdfCanvasContainer.appendChild(canvas);
+            
+            await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
+            pageNumDisplay.textContent = `Page ${num} of ${pdfDoc.numPages}`;
+            
+            prevPageBtn.disabled = num <= 1;
+            nextPageBtn.disabled = num >= pdfDoc.numPages;
+        }
+
+        // === Navigation ===
+        prevPageBtn.addEventListener('click', () => {
+            if (currentPageNum > 1) renderPage(currentPageNum - 1);
+        });
+
+        nextPageBtn.addEventListener('click', () => {
+            if (currentPageNum < pdfDoc.numPages) renderPage(currentPageNum + 1);
+        });
+
+        // === Claude API Integration ===
+        askButton.addEventListener('click', async () => {
+            const question = questionInput.value.trim();
+            if (!question || !currentPdfFile) return;
+
+            // Show loading
+            askText.classList.add('hidden');
+            askSpinner.classList.remove('hidden');
+            askButton.disabled = true;
+
+            try {
+                // Convert PDF to base64
+                const arrayBuffer = await currentPdfFile.arrayBuffer();
+                const base64 = btoa(String.fromCharCode(...new Uint8Array(arrayBuffer)));
+
+                // Call Claude API directly from frontend
+                const response = await fetch('https://api.anthropic.com/v1/messages', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-api-key': apiKey,
+                        'anthropic-version': '2023-06-01'
+                    },
+                    body: JSON.stringify({
+                        model: 'claude-3-5-sonnet-20241022',
+                        max_tokens: 1500,
+                        messages: [{
+                            role: 'user',
+                            content: [
+                                {
+                                    type: 'document',
+                                    source: {
+                                        type: 'base64',
+                                        media_type: 'application/pdf',
+                                        data: base64
+                                    },
+                                    citations: { enabled: true }
+                                },
+                                {
+                                    type: 'text',
+                                    text: `Please answer this question about the PDF: ${question}`
+                                }
+                            ]
+                        }]
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`API Error: ${response.status}`);
+                }
+
+                const result = await response.json();
+                displayAnswer(result.content[0].text, result.content[0].citations || []);
+
+            } catch (error) {
+                displayAnswer(`Error: ${error.message}`, []);
+            } finally {
+                // Hide loading
+                askText.classList.remove('hidden');
+                askSpinner.classList.add('hidden');
+                askButton.disabled = false;
+            }
+        });
+
+        function displayAnswer(answer, citations) {
+            answerText.textContent = answer;
+            answerArea.classList.remove('hidden');
+
+            if (citations && citations.length > 0) {
+                citationsList.innerHTML = '';
+                citations.forEach((citation, index) => {
+                    const citationEl = document.createElement('div');
+                    citationEl.className = 'p-2 bg-blue-50 border border-blue-200 rounded text-sm';
+                    citationEl.innerHTML = `
+                        <strong>${index + 1}.</strong> "${citation.cited_text || 'Citation'}"
+                        ${citation.page_number ? `<br><span class="text-xs text-gray-600">Page ${citation.page_number}</span>` : ''}
+                    `;
+                    citationsList.appendChild(citationEl);
+                });
+                citationsPanel.classList.remove('hidden');
+            } else {
+                citationsPanel.classList.add('hidden');
+            }
+        }
+
+        // === Keyboard Shortcuts ===
+        document.addEventListener('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && questionInput.value.trim()) {
+                e.preventDefault();
+                askButton.click();
+            }
+        });
+    </script>
+</body>
+</html>
